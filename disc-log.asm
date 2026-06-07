@@ -1,12 +1,7 @@
 section .rodata
     usage_msg       db "Usage:", 10, "        <program> <base> <number> <epsilon>", 10, 0
-    usage_len       equ $ - usage_msg
-    
-    ; Format string for output: log_{base}(num) = result
     fmt_out         db "log_(%.0f)(%.0f) = %.16g", 10, 0
-    fmt_out_int     db "log_(%.0f)(%.0f) = %.15g", 10, 0 ; fallback to match whole integer cases perfectly if needed
-
-    ; Constants
+    fmt_double      db "%lf", 0
     float_one       dq 1.0
 
 section .text
@@ -19,126 +14,124 @@ section .text
 main:
     push rbp
     mov rbp, rsp
-    
-    ; We need space for 3 local doubles (8 bytes each) to pass to sscanf
-    ; base: [rbp-8], number: [rbp-16], epsilon: [rbp-24]
-    sub rsp, 32
+    push rbx                ; Save callee-saved register
+    sub rsp, 40             ; Allocation space for local variables (16-byte aligned)
+                            ; [rbp-16] = saved rbx
+                            ; [rbp-24] = base (double)
+                            ; [rbp-32] = number (double)
+                            ; [rbp-40] = epsilon (double)
 
-    ; 1. Validate argument count (argc must be exactly 4: prog, base, num, eps)
+    ; Validate argument count (argc must be exactly 4)
     cmp rdi, 4
     jne .print_usage
 
-    ; Save argv
-    mov rbx, rsi 
+    mov rbx, rsi            ; Save argv string array pointer
 
-    ; Parse base (argv[1])
-    mov rdi, [rbx + 8]   ; argv[1]
-    mov rsi, .fmt_double ; "%lf"
-    lea rdx, [rbp - 8]   ; &base
+    ; Parse base
+    mov rdi, [rbx + 8]      
+    mov rsi, fmt_double     
+    lea rdx, [rbp - 24]     
     xor eax, eax
     call sscanf
     cmp eax, 1
     jne .print_usage
 
-    ; Parse number (argv[2])
-    mov rdi, [rbx + 16]  ; argv[2]
-    mov rsi, .fmt_double ; "%lf"
-    lea rdx, [rbp - 16]  ; &number
+    ; Parse number
+    mov rdi, [rbx + 16]     
+    mov rsi, fmt_double     
+    lea rdx, [rbp - 32]     
     xor eax, eax
     call sscanf
     cmp eax, 1
     jne .print_usage
 
-    ; Parse epsilon (argv[3])
-    mov rdi, [rbx + 24]  ; argv[3]
-    mov rsi, .fmt_double ; "%lf"
-    lea rdx, [rbp - 24]  ; &epsilon
+    ; Parse epsilon
+    mov rdi, [rbx + 24]     
+    mov rsi, fmt_double     
+    lea rdx, [rbp - 40]     
     xor eax, eax
     call sscanf
     cmp eax, 1
     jne .print_usage
 
-    ; 2. Call the recursive log function
-    movsd xmm0, [rbp - 8]   ; xmm0 = a (base)
-    movsd xmm1, [rbp - 16]  ; xmm1 = b (number)
-    movsd xmm2, [rbp - 24]  ; xmm2 = eps
+    ; Execute core calculation
+    movsd xmm0, [rbp - 24]  ; base (a)
+    movsd xmm1, [rbp - 32]  ; number (b)
+    movsd xmm2, [rbp - 40]  ; epsilon
     call compute_log
 
-    ; 3. Print the result to stdout
-    movsd xmm3, xmm0        ; result moves to xmm3
+    ; Output formatted calculations
+    movsd xmm3, xmm0        ; Temp swap calculation result to safety
     mov rdi, fmt_out
-    movsd xmm0, [rbp - 8]   ; base
-    movsd xmm1, [rbp - 16]  ; number
+    movsd xmm0, [rbp - 24]  ; original base
+    movsd xmm1, [rbp - 32]  ; original number
     movsd xmm2, xmm3        ; result
-    mov eax, 3              ; 3 float arguments
+    mov eax, 3              ; 3 vector float arguments populated
     call printf
 
     xor eax, eax
-    mov rsp, rbp
-    pop rbp
-    ret
+    jmp .exit
 
 .print_usage:
-    ; Print Usage block to stderr
     mov rdi, [stderr]
     mov rsi, usage_msg
     xor eax, eax
     call fprintf
-    
     mov eax, 1
-    mov rsp, rbp
+
+.exit:
+    add rsp, 40
+    pop rbx
     pop rbp
     ret
 
-section .rodata
-    .fmt_double db "%lf", 0
-
-section .text
 ; -----------------------------------------------------------------------------
-; compute_log: Recursive core logic matching the PDF spec.
-; Inputs:
-;   xmm0 = a (base)
-;   xmm1 = b (number)
-;   xmm2 = epsilon
-; Output:
-;   xmm0 = computed result
+; compute_log: Corrected Base Evaluation Framework
 ; -----------------------------------------------------------------------------
 compute_log:
     push rbp
     mov rbp, rsp
-    sub rsp, 32             ; allocate space to save state across recursive calls
+    sub rsp, 32
     
-    ; Save parameters onto local stack frames
     movsd [rbp - 8], xmm0   ; a
     movsd [rbp - 16], xmm1  ; b
     movsd [rbp - 24], xmm2  ; eps
+
+    ; Base Case Guard: If b <= 1.0 (or within epsilon distance of 1.0), return 0
+    movsd xmm3, [float_one]
+    comisd xmm1, xmm3
+    jbe .return_zero
 
     ; --- Case 1: If a > b ---
     comisd xmm0, xmm1
     ja .case_greater
 
-    ; --- Case 2: Otherwise, if b/a < eps ---
+    ; --- Case 2: Otherwise, if b/a < (1.0 + eps) ---
     movsd xmm0, xmm1
     divsd xmm0, [rbp - 8]   ; xmm0 = b / a
-    comisd xmm0, [rbp - 24] ; compare (b/a) with eps
-    jb .case_epsilon_reached
+    
+    ; Add termination safeguard: if b/a is basically 1.0, stop recursion loop
+    movsd xmm3, [float_one]
+    addsd xmm3, [rbp - 24]  ; 1.0 + eps
+    comisd xmm0, xmm3
+    jbe .case_epsilon_reached
 
     ; --- Case 3: Otherwise, return 1 + log_a(b / a) ---
-    movsd xmm0, [rbp - 8]   ; base remains 'a'
+    movsd xmm0, [rbp - 8]   ; structural base 'a' remains unchanged
     movsd xmm1, [rbp - 16]  
-    divsd xmm1, xmm0        ; argument becomes b / a
-    movsd xmm2, [rbp - 24]  ; epsilon remains same
-    call compute_log        ; returns log_a(b/a) in xmm0
+    divsd xmm1, xmm0        ; reduce parameters: new b = b / a
+    movsd xmm2, [rbp - 24]  
+    call compute_log        
     
-    addsd xmm0, [float_one] ; add 1.0
+    addsd xmm0, [float_one] 
     jmp .done
 
 .case_greater:
     ; return 1.0 / log_b(a)
-    movsd xmm0, [rbp - 16]  ; new base = b
-    movsd xmm1, [rbp - 8]   ; new number = a
-    movsd xmm2, [rbp - 24]  ; epsilon remains same
-    call compute_log        ; returns log_b(a) in xmm0
+    movsd xmm0, [rbp - 16]  ; inverted base = b
+    movsd xmm1, [rbp - 8]   ; inverted target = a
+    movsd xmm2, [rbp - 24]  
+    call compute_log        
     
     movsd xmm1, [float_one]
     divsd xmm1, xmm0        ; 1.0 / log_b(a)
@@ -146,9 +139,12 @@ compute_log:
     jmp .done
 
 .case_epsilon_reached:
-    movsd xmm0, [float_one] ; return 1
+    movsd xmm0, [float_one] 
+    jmp .done
+
+.return_zero:
+    xorpd xmm0, xmm0        ; clean register to return absolute 0.0 value
 
 .done:
-    mov rsp, rbp
-    pop rbp
+    leave
     ret
