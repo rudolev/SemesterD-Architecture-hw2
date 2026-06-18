@@ -21,12 +21,12 @@
     14                                  main:
     15 00000000 55                          push rbp
     16 00000001 4889E5                      mov rbp, rsp
-    17 00000004 53                          push rbx                ; Save callee-saved register
-    18 00000005 4883EC28                    sub rsp, 40             ; Allocation space for local variables (16-byte aligned)
-    19                                                              ; [rbp-16] = saved rbx
-    20                                                              ; [rbp-24] = base (double)
-    21                                                              ; [rbp-32] = number (double)
-    22                                                              ; [rbp-40] = epsilon (double)
+    17 00000004 53                          push rbx
+    18 00000005 4883EC28                    sub rsp, 40
+    19                                      ; [rbp-16] = saved rbx
+    20                                      ; [rbp-24] = base (double)
+    21                                      ; [rbp-32] = number (double)
+    22                                      ; [rbp-40] = epsilon (double)
     23                                  
     24                                      ; Validate argument count (argc must be exactly 4)
     25 00000009 4883FF04                    cmp rdi, 4
@@ -70,8 +70,8 @@
     60 0000007A F20F1055D8                  movsd xmm2, [rbp - 40]  ; epsilon
     61 0000007F E84F000000                  call compute_log
     62                                  
-    63                                      ; Output formatted calculations
-    64 00000084 F20F10D8                    movsd xmm3, xmm0        ; Temp swap calculation result to safety
+    63                                      ; Output calculations after format
+    64 00000084 F20F10D8                    movsd xmm3, xmm0
     65 00000088 48BF-                       mov rdi, fmt_out
     65 0000008A [3400000000000000] 
     66 00000092 F20F1045E8                  movsd xmm0, [rbp - 24]  ; original base
@@ -98,18 +98,18 @@
     86 000000D2 C3                          ret
     87                                  
     88                                  ; -----------------------------------------------------------------------------
-    89                                  ; compute_log: Corrected Base Evaluation Framework
+    89                                  ; compute_log: Compute the log given the base, num, and epsilon.
     90                                  ; -----------------------------------------------------------------------------
     91                                  compute_log:
     92 000000D3 55                          push rbp
     93 000000D4 4889E5                      mov rbp, rsp
     94 000000D7 4883EC20                    sub rsp, 32
     95                                      
-    96 000000DB F20F1145F8                  movsd [rbp - 8], xmm0   ; a
-    97 000000E0 F20F114DF0                  movsd [rbp - 16], xmm1  ; b
+    96 000000DB F20F1145F8                  movsd [rbp - 8], xmm0
+    97 000000E0 F20F114DF0                  movsd [rbp - 16], xmm1
     98 000000E5 F20F1155E8                  movsd [rbp - 24], xmm2  ; eps
     99                                  
-   100                                      ; Base Case Guard: If b <= 1.0 (or within epsilon distance of 1.0), return 0
+   100                                      ; Base Case: If b <= 1.0 (or within epsilon distance of 1.0), return 0
    101 000000EA F20F101C25-                 movsd xmm3, [float_one]
    101 000000EF [52000000]         
    102 000000F3 660F2FCB                    comisd xmm1, xmm3
@@ -119,21 +119,21 @@
    106 000000F9 660F2FC1                    comisd xmm0, xmm1
    107 000000FD 7740                        ja .case_greater
    108                                  
-   109                                      ; --- Case 2: Otherwise, if b/a < (1.0 + eps) ---
+   109                                      ; --- Case 2: else, if b/a < (1.0 + eps) ---
    110 000000FF F20F10C1                    movsd xmm0, xmm1
-   111 00000103 F20F5E45F8                  divsd xmm0, [rbp - 8]   ; xmm0 = b / a
+   111 00000103 F20F5E45F8                  divsd xmm0, [rbp - 8]
    112                                      
-   113                                      ; Add termination safeguard: if b/a is basically 1.0, stop recursion loop
+   113                                      ; Add safeguard: if b/a is 1.0, stop recursion loop
    114 00000108 F20F101C25-                 movsd xmm3, [float_one]
    114 0000010D [52000000]         
-   115 00000111 F20F585DE8                  addsd xmm3, [rbp - 24]  ; 1.0 + eps
+   115 00000111 F20F585DE8                  addsd xmm3, [rbp - 24]
    116 00000116 660F2FC3                    comisd xmm0, xmm3
    117 0000011A 764A                        jbe .case_epsilon_reached
    118                                  
-   119                                      ; --- Case 3: Otherwise, return 1 + log_a(b / a) ---
-   120 0000011C F20F1045F8                  movsd xmm0, [rbp - 8]   ; structural base 'a' remains unchanged
+   119                                      ; --- Case 3: else, return 1 + log_a(b / a) ---
+   120 0000011C F20F1045F8                  movsd xmm0, [rbp - 8]
    121 00000121 F20F104DF0                  movsd xmm1, [rbp - 16]  
-   122 00000126 F20F5EC8                    divsd xmm1, xmm0        ; reduce parameters: new b = b / a
+   122 00000126 F20F5EC8                    divsd xmm1, xmm0
    123 0000012A F20F1055E8                  movsd xmm2, [rbp - 24]  
    124 0000012F E89FFFFFFF                  call compute_log        
    125                                      
@@ -143,14 +143,14 @@
    128                                  
    129                                  .case_greater:
    130                                      ; return 1.0 / log_b(a)
-   131 0000013F F20F1045F0                  movsd xmm0, [rbp - 16]  ; inverted base = b
-   132 00000144 F20F104DF8                  movsd xmm1, [rbp - 8]   ; inverted target = a
+   131 0000013F F20F1045F0                  movsd xmm0, [rbp - 16]
+   132 00000144 F20F104DF8                  movsd xmm1, [rbp - 8]
    133 00000149 F20F1055E8                  movsd xmm2, [rbp - 24]  
    134 0000014E E880FFFFFF                  call compute_log        
    135                                      
    136 00000153 F20F100C25-                 movsd xmm1, [float_one]
    136 00000158 [52000000]         
-   137 0000015C F20F5EC8                    divsd xmm1, xmm0        ; 1.0 / log_b(a)
+   137 0000015C F20F5EC8                    divsd xmm1, xmm0
    138 00000160 F20F10C1                    movsd xmm0, xmm1
    139 00000164 EB0F                        jmp .done
    140                                  
@@ -160,7 +160,7 @@
    143 0000016F EB04                        jmp .done
    144                                  
    145                                  .return_zero:
-   146 00000171 660F57C0                    xorpd xmm0, xmm0        ; clean register to return absolute 0.0 value
+   146 00000171 660F57C0                    xorpd xmm0, xmm0
    147                                  
    148                                  .done:
    149 00000175 C9                          leave
